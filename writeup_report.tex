@@ -4,7 +4,7 @@
 \author{Bastian Dittmar}
 \date{\today}
 \subject{Self Driving Car Nano Degree}
-\title{Advanced Lane Finding}
+\title{Vehicle Detection}
 
 \usepackage{wrapfig, floatrow}
 \usepackage{graphicx}
@@ -36,191 +36,216 @@
 
 
 \section{Introduction}
-In this project, a software pipeline is implemented to identify the lane boundaries in a video from a front-facing camera on a car. The code to solve this project is provided in a jupyter notebook.
+In this project, a software pipeline is implemented to detect vehicles in a video that was recorded with a dash cam in a driving car. The code to solve this project is provided in a jupyter notebook.
 
 The goals and steps of this project are the following:
 \begin{enumerate}
-\item Compute the camera calibration matrix and distortion coefficients given a set of chessboard images.
-\item Apply a distortion correction to raw images.
-\item Use color transforms, gradients, etc., to create a thresholded binary image.
-\item Apply a perspective transform to rectify binary image (birds-eye view).
-\item Detect lane pixels and fit to find the lane boundary.
-\item Determine the curvature of the lane and vehicle position with respect to center.
-\item Warp the detected lane boundaries back onto the original image.
-\item Output visual display of the lane boundaries and numerical estimation of lane curvature and vehicle position.
+\item Perform a Histogram of Oriented Gradients (HOG) feature extraction on a labeled training set of images and train a classifier Linear SVM classifier.
+\item Optionally, you can also apply a color transform and append binned color features, as well as histograms of color, to your HOG feature vector.
+\item Note: for those first two steps don't forget to normalize your features and randomize a selection for training and testing.
+\item Implement a sliding-window technique and use your trained classifier to search for vehicles in images.
+\item Run your pipeline on a video stream (start with the test\_video.mp4 and later implement on full project\_video.mp4) and create a heat map of recurring detections frame by frame to reject outliers and follow detected vehicles.
+\item Estimate a bounding box for vehicles detected.
 \end{enumerate}
 
 
-\section{Camera Calibration}
-\label{sec:camera_calibration}
-The code for this step is contained in code cells 2 and 3 of the IPython notebook located in ``./AdvancedLaneLines.ipynb''
+\section{Feature Extraction}
+For this project it is necessary to classify an image patch as either vehicle or non-vehicle. To solve this I defined a number of features that will be used to train a classifier. I used three types of features. A spatial feature, a color histogram and a histogram of gradients (HOG). The code for feature exploration is in the  explore\_features notebook.
 
-I start by preparing "object points", which will be the (x, y, z) coordinates of the chessboard corners in the world. Here I am assuming the chessboard is fixed on the (x, y) plane at z=0, such that the object points are the same for each calibration image. Thus, objp is just a replicated array of coordinates, and objpoints will be appended with a copy of it every time I successfully detect all chessboard corners in a test image. imgpoints will be appended with the (x, y) pixel position of each of the corners in the image plane with each successful chessboard detection.
+\subsection{Color Space}
+Before extracting features I chose to convert the image into a different color space. As demonstrated in cell ``Compare Color Spaces'' in the vehicle\_detection notebook the color space YCrCb seems to perform best.
 
-I then used the output objpoints and imgpoints to compute the camera calibration and distortion coefficients using the cv2.calibrateCamera() function. I applied this distortion correction to the test image using the cv2.undistort() function. The result is depicted in figure \ref{fig:camera_calibration}.
+\subsection{Spatial features}
+The spatial features are nothing but reduction in size of the image. That would group nearby pixel values and group them into an averaged new feature value. This feature is demonstrated in figure  \ref{fig:feature_spatial}. I decided to use a size of 32 pixels which seemed to be a decent trade-off between speed ad information.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{output_images/feature_spatial.jpg}
+        \caption{Spatial features with image sizes of 64, 32 and 16 pixels}
+    \label{fig:feature_spatial}
+\end{figure}
+
+\subsection{Histogram Features}
+The second type of feature is a color histogram. I chose 32 bins per color channel. An example histogram for the color space YCrC is depicted in figure \ref{fig:feature_histogram}.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{output_images/feature_histogram.jpg}
+        \caption{Histogram features with bin size of 32 for the channels Y, Cr and Cb}
+    \label{fig:feature_histogram}
+\end{figure}
+
+
+\subsection{Histogram of Gradients (HOG)}
+While the previous two features mostly detect colors, the HOG feature seems to be the best feature to capture the shape of a vehicle. The HOG function has multiple parameters like number of orientations, block and cell size. I explored various combinations, some of them are depicted in figure \ref{fig:feature_hog}. While it is possible to increase classification speed when increasing the number of pixels per cell while maintaining a decent accuracy, I went with a lower number of 8 pxels per cell. I chose 11 orientations, 2 cells per block an all three color channels. This allowed me to achieve a good accuracy as described later.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\textwidth]{output_images/feature_hog.jpg}
+        \caption{HOG feature images fir different parameters}
+    \label{fig:feature_hog}
+\end{figure}
+
+
+\section{Training a classifier}
+To train a classifier that can successfully distinguish between vehicles and non-vehicles, I loaded a training set, labeled it, extracted features and then trained a support vector machine with this data.
+
+\subsection{Training Data}
+The training data is loaded in cell ``Import Training Data'' of the vehicle\_detection notebook. To achieve a better result in accuracy I added a few vehicle images from the Udacity dataset. That allowed me to have the exact same number of vehicle and non-vehicle images (8968 each).
+
+Aside from that i grouped images that are next to each other as they are extracted from time series images and often show the same car. Using a GroupKFold iterator to split train and test sets will keep images depicting the same car in either training or test set. This reduces overfitting.
+
+After extracting features from the images, the data is normalized using a StandardScaler which is necessary to allow each feature having the same impact on classification. The scaler is saved as it is needed to scale each image later on when classifying it.
+
+\subsection{SVC fitting}
+Before fitting the Classifier I used a ExtraTreesClassifier to reduce the number of features by those, that have a small impact on classification. This helps speeding up the training and classification later on. Using this selection model I could reduce the number of features from 9636 features down to 1090 features.
+
+To find the optimal feature generation parameters and evaluate different SVC configurations I used cross\_validation and a GroupKFold iterator. As a trade-off between speed and accuracy I chose a linear SVC as the rbf kernel did not show significant improvement in accuracy. For the linear SVC I used a grid search to find the best C-parameter. As seen in the cell ``Grid search on SVC parameters'' $C=0.001$ achieves the best result. A cross validation in cell ``Train SVC'' shows an accuracy of 0.991 which seems sufficient. 
+
+\section{Vehicle Detection}
+To detect vehicles in images and video frames Ia sliding window approach is used to search small patches for cars. The detections are then accumulated and a bounding box is extracted.
+
+\subsection{Sliding Windows}
+The sliding windows function is in cell ``Vehicle Detection''. It basically generates a hog for the whole image. This speeds up feature extraction as the HOG features can be reused. The sliding window is moved 2 cells per step in either x- or y-direction until the whole image has been classified. For each windows spatial and histogram features are generated and stacked with the hog features. The feature vector is scaled with the standard scaler and reduced by the selection model. Then the SVC classifies the feature vector. If a vehicle is detection the window is added to a list which is returned in the end (see figure \ref{fig:sliding_windows}.
 
 \begin{figure}[h]
     \centering
     \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/chessboard10_distorted.jpg}
-        \caption{Original chessboard image}
-        \label{fig:chessboard_original}
+        \includegraphics[width=\textwidth]{output_images/test1_bboxes.jpg}
     \end{subfigure}\quad
     \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/chessboard10_undistorted.jpg}
-        \caption{Undistorted warped into image plane}
-        \label{fig:chessboard_undistorted}
+        \includegraphics[width=\textwidth]{output_images/test1_heat.jpg}
     \end{subfigure} 
-    \caption{Example chessboard images used for camera calibration}
-    \label{fig:camera_calibration}
+    \caption{Sliding windows on image test01.jpg depicting the overelapping positive detections left and the heat map right.}
+    \label{fig:sliding_windows}
 \end{figure}
 
-\section{Pipeline (single images)}
+As the cars size in the source image depends on its distance from the camera, the sliding windows approach is done at different image scales for each frame. As this highly increases execution time, the search area for sliding windows is reduced in y-range to cover that part where cars can be expected. A y-range of (380, 660) seemed to work nicely. The area is depicted in figure \ref{fig:y_area}. Three different window sizes are used between 75 and 98 pixels.
 
-\subsection{Distortion Correction}
-The first step is to correct the image for distortion. I used the camera matrix and distortion coefficients I obtained from the camera calibration in section \ref{sec:camera_calibration} with the function cv2.undistort(). The result is shown in figure \ref{fig:test02_undistort}.
-
-\begin{figure}
-\includegraphics[width=.925\textwidth]{images/preprocess_test02__undistort.jpg}
-\caption{Undistorted test image test02.jpg}
-\label{fig:test02_undistort}
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.7\textwidth]{output_images/test1_range.jpg}
+        \caption{Only a subarea of the image where cars can be expected is used for the sliding windows}
+    \label{fig:y_area}
 \end{figure}
 
-\subsection{Perspective Transformation}
-The second step of my pipeline is the perspective transformation of the image into a bird's view. I chose to perform this step before thresholding the image as I found the result to be better. In particular for gradient thresholds which use a kernel of constant size over the image, the distance of an object to the camera matters in a perspective view. Lines that are further away will appear thinner and would require a smaller kernel size than lines in the front for similar results. The bird's view perspective on the other hand transforms the lines to be more or less equally thick along the whole image.
+\subsection{Bounding Box Extraction} 
+The bounding box of a vehicle is generated by using heat maps. For each window that is detected in the previous step, the window's pixels are incremented in heat map image. The higher a heat value in the resulting image is, the more overlapping windows it had and the more likely it is to be of a vehicle. The heat map is thresholded and labeled using connected components. Afterwards for each component the minimal surrounding rectangle is generated which is the vehicles bounding box.
 
-To find a proper transformation 4 points on the host lane lines were chosen and then transformed into a square. The result is depicted in figure \ref{fig:birds_view} and the code in cell ``Perspective Transform''. The transformation from warping this image is used in the pipeline to transform all images into the bird's view. This allows us to measure curvature of the lane later on.
+For videos this step is averaged over several frames. The heat map is accumulated for 5 frames each. This helps reducing false positives. The bounding box that is extracted from the accumulated heat map is also averaged over 5 frames to smooth its size and position. This is being done using the Vehicle class. For each existing vehicle a new bounding box is searched, that covers a large part of the vehicle's current bounding box. if such is found it is added to the vehicles bounding box list replacing the oldest entry. If a vehicle has not seen a matching bounding box for 5 frames it is removed from the list.
+
+\section{Results}
+The resulting bounding boxes for the test images can be found in the folder output\_images. For test images 2-5 the results are depicted in figure \ref{fig:test_vehicles}. While there are a few false positives in test02 and test05, the vehicles are classified properly. The false positives can be significantly reduced using averaging as being shown in the project video.
 
 \begin{figure}[h]
     \centering
     \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/straight_lines.jpg}
+        \includegraphics[width=\textwidth]{output_images/test2.jpg}
     \end{subfigure}\quad
     \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/straight_lines_warped.jpg}
-    \end{subfigure} 
-    \caption{Bird's view transformation: 4 points on the lane lines were choses that are in shape of a rectangle in world coordinates (assuming the world is flat)}
-    \label{fig:birds_view}
-\end{figure}
-
-\subsection{Segmentation}
-
-In the next step the image will be segmented using a variation of thresholding algorithms. Result is a binary image with active pixel that we suspect to be lane pixel. The segmentation is done in code cells ``Thresholding Functions'' and ``Image Preprocessing''.
-
-\subsubsection*{Color Threshold}
-The first part of the segmentation is a color threshold that tries to identify bright yellow and white objects in the image as those are the lane colors. To account for variations in illumination like shadows I transformed the Image from the BGR color space into the HSV color space. In the HSV color spaces shadows will have a low V-value. The color itself is selected by hue and saturation. Yellow has high saturation in HSV while white has low saturation. The hue for yellow is rather specific around a value of 20 while white is no specific hue. For yellow i used the HSV-thresholds (0-40), (80-255) and (200-255). For white the HSV-thresholds (20-255), (0-80) and (200-255) seemed to work. The thresholds are first applied on the respective channel separately and then the results are combined with logical-and. Thus a pixel has to fall in all threshold ranges to be selected. This is done in function combined\_channel\_treshold() in cell ``Thresholding Functions''. The results of this step can be seen in figure \ref{fig:color_threshold}.
-
-\begin{figure}[h]
-    \centering
-    \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/preprocess_test02__hsv_yellow.jpg}
+        \includegraphics[width=\textwidth]{output_images/test3.jpg}
+    \end{subfigure} \\ \medskip
+        \begin{subfigure}{0.45\textwidth}
+        \includegraphics[width=\textwidth]{output_images/test4.jpg}
     \end{subfigure}\quad
     \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/preprocess_test02__hsv_white.jpg}
-    \end{subfigure} 
-    \caption{Color thresholds for yellow lines (left) and white lines (right) on test02.jpg.}
-    \label{fig:color_threshold}
+        \includegraphics[width=\textwidth]{output_images/test5.jpg}
+    \end{subfigure}
+    \caption{Vehicle detections for test images 2-5 from top left to bottom right}  
+    \label{fig:test_vehicles}
 \end{figure}
-
-\subsubsection*{Gradient Threshold}
-In addition to the color thresholds I chose to apply a gradient threshold using a Sobel operator in x-direction. This will mostly find vertical edges in the image. While the directional gradient sounds promising in theory as well, I found it too noisy to work with in practice. For the gradient in x-direction I chose the HLS color space and applied the gradient to the L- and S-channel which pick up lines quite well regardless of the illumination. For the former I used a threshold of (40-255) and for the latter a threshold of (25-255). The results are shown in figure \ref{fig:gradient_threshold}. To further reduce noise a median filter with kernel size 9.
-
-\begin{figure}[h]
-    \centering
-    \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/preprocess_test02__glx.jpg}
-    \end{subfigure}\quad
-    \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/preprocess_test02__gsx.jpg}
-    \end{subfigure} 
-    \caption{Gradient thresholds in x-direction ión the L-channe (left) and S-channel (right) on test02.jpg.}
-    \label{fig:gradient_threshold}
-\end{figure}
-
-\subsubsection*{Combining Thresholds}
-The final binary image is a logical-or combination of all 4 thresholding procedures, meaning any pixel that is active in at least one of the threshold images will be picked. The result is shown in figure \ref{fig:threshold_final} on test02.jpg where the lane is clearly visible. While test02.jpg is easy, it demonstrates the participation of all 4 thresholds quite well.
-
-\begin{figure}[h]
-    \centering
-    \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/preprocess_test02__combined-OR.jpg}
-	\caption{or-combined thresholds}
-	\label{fig:threshold_combined}
-    \end{subfigure}\quad
-    \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/preprocess_test02__warped.jpg}
-    \caption{original image in bird's view}
-    \end{subfigure} 
-    \caption{The combination of all threshold images of the undistorted image test02.jpg in bird's view.}
-    \label{fig:threshold_final}
-\end{figure}
-
-\subsection{Lane Detection}
-The lane detection algorithm is implemented in cell ``Lane Detection'' and uses the thresholded image in figure \ref{fig:threshold_combined}. There are two different algorithms to detect the left and right lane lines that differ in how they estimate the search areas where they look for lane pixels.
-
-\subsubsection*{Sliding Window}
-The sliding window approach starts with a histogram of the bottom half of the image. It then calculates the history maxima left and right of the image's center. The x-coordinates are starting positions. For each position 9 windows will be stacked on top of each other. All pixels within a window will count as lane pixel and the current window position will be centered around the mean x-value of the lane pixels if there were more than 50 pixels. The next window's position is a linear extrapolation of the previous two positions. The resulting 18 sliding windows are depicted in figure \ref{fig:sliding_windows}. The lane lines are then estimated by fitting a second order polynom to the located lane pixels using numpy's polyfit() function. The polynomials are colored yellow.
-
-\subsubsection*{Polynomial Search Arrea}
-If there already is information about previous lane positions another algorithm can be used. Instead of sliding windows from the bottom to the top, tracking lane pixels, the search area is defined by the previous lane polynomial and a width to either side. Any pixel in that area will be considered a lane pixel. The search area is shown in figure \ref{fig:polynomial_search}. The lane estimation then is the same as in the sliding windows approach using numpy's polyfit().
-
-
-\begin{figure}[h]
-    \centering
-    \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/lane_detection_test02_01.jpg}
-	\caption{Slidng windows}
-	\label{fig:sliding_windows}
-    \end{subfigure}\quad
-    \begin{subfigure}{0.45\textwidth}
-        \includegraphics[width=\textwidth]{images/lane_detection_test02_02.jpg}
-    \caption{polynomial search area}
-    \label{fig:polynomial_search}
-    \end{subfigure} 
-    \caption{The two different search approaches for lane detection. Search areas are marked green, estimated lane position in yellow.}  
-    \label{fig:lane_detection}
-\end{figure}
-
-\subsubsection*{Curve Radius Estimation}
-After the lane pixels have been detected and are fitted to a polynomial we measure the curvature. This can be done with there formula
-
-$$ R = \frac{(1+(2Ay_0 + B)^2)^{1.5}}{|2A|}$$
-
-where the curve is $f(y)= Ay^2 + By + C$ and $y_0$ is the position where the radius is measured. In our case we want to know the curvature at the car's position so we choose the bottom of the image. The resulting radius would be in pixel dimensions. As we are interested in something that relates to world coordinates, we scale the coordinate system before fitting the polynomial as well as $y_0$. For the scaling factors I googled the width of a lane (3.7 m) and he distance between dashed lines (9 m) and the length of one dash (3 m). Mapping those parameters to a transformed image in bird's view and measuring the pixels of those lengths I estimated a scaling of
-
- $$s_x = \frac{3.7}{760} \frac{m}{px}\;\;\; \text{ and } \;\;\;s_y = \frac{30}{700} \frac{m}{px}.$$
- 
-\subsubsection*{Lane Tracking}
-To decide which of the lane detection approaches to use and to increase robustness we keep track of both lane line curves for the last 10 frames. Everytime we fit a new polynomial to lane pixels we make a sanity check of the line's distance to each other at the car's position. If it varies more than 30 cm from the expected distance of 3.7 m, the lane will be rejected. Otherwise both lines will replace the oldest lines in a list of the last 10 lane lines. The actual lane curve that is used for measuring the curvature or being displayed is an average of the last 10 curves. That makes the behavior not only more robust but also more visually pleasing as it prevents jumping lines from frame to frame.
-
-\subsubsection*{Lane Projection}
-The last step is to project the lane curves back into the original image. This is done by using the inverse Matrix from the bird's view projection and overlaying it with the original image. The result can be seen in figure \ref{fig:lane_projection}.
-
-\begin{figure}[h]
-    \centering
-    \includegraphics[width=0.925\textwidth]{images/lane_projection_test02_01.jpg}
-
-    \caption{Projection of the detected lane onto the original image test02.jpg.}
-    \label{fig:lane_projection}
-\end{figure}
-
-\section{Pipeline (video)}
-The pipeline has also been tested on the project video. The result can be found at project\_video\_out.mp4 or with debug information at project\_video\_out\_debug.mp4. 
-
 \section{Discussion}
-The main issue for this project was to find the right combination of threshold parameters. Currently it feels like they are quite project specific to the test set of images and the video. Something adaptive would be nicer that estimates optimal thresholds per frame or even per line for something like horizontal thresholds. The lighting conditions might be a good start for the adaptive thresholding. I tried briefly to work with the in openCV built-in adaptive thresholds but the results were not pleasing.
+The classifier seems to be quite accurate on the test set with a score of over 0.99. That being said it does not seem to perform as well on the video frames. I assume a larger dataset for training might achieve better results and reduce false positives.
 
-My other problem was a sanity check. The curvature values are jumping a lot because the lane lines often only cover part of the vertical space and they vary in width. This leads to a lot of noise in curve fitting. I tried to monitor variations in the polynomial coefficients, parallelity of the lane lines but nothing was really useful in the sense, that large deviations would match unpleasing visual results.
+The sliding window approach works but is relatively slow. I started using more scales by actually checking the maximum and minimum sizes of cars in the video and interpolating 10 scales in-between. As larger windows are less likely to be detected I scaled the added heat values relative to the window size. Further I reduces the search area in y-direction with a decreasing windows size and smaller cars will appear closer to the horizon. The idea seemed plausible and the speed was actually a lot higher but the results weren't pleasing. Interestingly a few small scales seem to work better.
 
-When the car is jumping and the contrast of road surface to lane lines is weak, the algorithm fails. This is indicated by red lanes in the video and depicted in figure \ref{fig:sanity_check}. The lanes are rejected because they are too far apart (4.6 m). But if we look at the curves this is not the only problem. The result is far from reality because the left lane detection is too short.
+The algorithm for bounding box extraction seems to be quite sensitive to different values for the threshold vehicle matching and they also depend on many other parameters.
+%\begin{figure}
+%\includegraphics[width=.925\textwidth]{images/preprocess_test02__undistort.jpg}
+%\caption{Undistorted test image test02.jpg}
+%\label{fig:test02_undistort}
+%\end{figure}
+%
+%\begin{figure}[h]
+%    \centering
+%    \begin{subfigure}{0.45\textwidth}
+%        \includegraphics[width=\textwidth]{images/straight_lines.jpg}
+%    \end{subfigure}\quad
+%    \begin{subfigure}{0.45\textwidth}
+%        \includegraphics[width=\textwidth]{images/straight_lines_warped.jpg}
+%    \end{subfigure} 
+%    \caption{Bird's view transformation: 4 points on the lane lines were choses that are in shape of a rectangle in world coordinates (assuming the world is flat)}
+%    \label{fig:birds_view}
+%\end{figure}
+%
+%
+%\begin{figure}[h]
+%    \centering
+%    \begin{subfigure}{0.45\textwidth}
+%        \includegraphics[width=\textwidth]{images/preprocess_test02__hsv_yellow.jpg}
+%    \end{subfigure}\quad
+%    \begin{subfigure}{0.45\textwidth}
+%        \includegraphics[width=\textwidth]{images/preprocess_test02__hsv_white.jpg}
+%    \end{subfigure} 
+%    \caption{Color thresholds for yellow lines (left) and white lines (right) on test02.jpg.}
+%    \label{fig:color_threshold}
+%\end{figure}
+%
+%
+%\begin{figure}[h]
+%    \centering
+%    \begin{subfigure}{0.45\textwidth}
+%        \includegraphics[width=\textwidth]{images/preprocess_test02__glx.jpg}
+%    \end{subfigure}\quad
+%    \begin{subfigure}{0.45\textwidth}
+%        \includegraphics[width=\textwidth]{images/preprocess_test02__gsx.jpg}
+%    \end{subfigure} 
+%    \caption{Gradient thresholds in x-direction ión the L-channe (left) and S-channel (right) on test02.jpg.}
+%    \label{fig:gradient_threshold}
+%\end{figure}
+%
+%
+%
+%\begin{figure}[h]
+%    \centering
+%    \begin{subfigure}{0.45\textwidth}
+%        \includegraphics[width=\textwidth]{images/preprocess_test02__combined-OR.jpg}
+%	\caption{or-combined thresholds}
+%	\label{fig:threshold_combined}
+%    \end{subfigure}\quad
+%    \begin{subfigure}{0.45\textwidth}
+%        \includegraphics[width=\textwidth]{images/preprocess_test02__warped.jpg}
+%    \caption{original image in bird's view}
+%    \end{subfigure} 
+%    \caption{The combination of all threshold images of the undistorted image test02.jpg in bird's view.}
+%    \label{fig:threshold_final}
+%\end{figure}
+%
+%
+%\begin{figure}[h]
+%    \centering
+%    \begin{subfigure}{0.45\textwidth}
+%        \includegraphics[width=\textwidth]{images/lane_detection_test02_01.jpg}
+%	\caption{Slidng windows}
+%	\label{fig:sliding_windows}
+%    \end{subfigure}\quad
+%    \begin{subfigure}{0.45\textwidth}
+%        \includegraphics[width=\textwidth]{images/lane_detection_test02_02.jpg}
+%    \caption{polynomial search area}
+%    \label{fig:polynomial_search}
+%    \end{subfigure} 
+%    \caption{The two different search approaches for lane detection. Search areas are marked green, estimated lane position in yellow.}  
+%    \label{fig:lane_detection}
+%\end{figure}
 
-\begin{figure}[h]
-    \centering
-    \includegraphics[width=0.925\textwidth]{images/lane_projection_sanity_01.jpg}
 
-    \caption{Red lanes indicate that the lane detection was rejected for this frame..}
-    \label{fig:sanity_check}
-\end{figure} 
+%\begin{figure}[h]
+%    \centering
+%    \includegraphics[width=0.925\textwidth]{images/lane_projection_sanity_01.jpg}
+%
+%    \caption{Red lanes indicate that the lane detection was rejected for this frame..}
+%    \label{fig:sanity_check}
+%\end{figure} 
 
 \printbibliography
 \end{document}
